@@ -1,0 +1,125 @@
+// input: .tif image channels for setup, .czi stacks for batch processing
+// output: array with percent of cell count expressing markers, particle analysis of co-expressing cells
+
+
+// Parameter setup
+// Set somata threshold and calculate average size
+
+close("*");
+
+waitForUser("Open Hoechst image then click OK"); 
+run("Threshold...");
+waitForUser("Set threshold sliders");
+lowerHoechst = getNumber("Enter lower threshold", 0);
+upperHoechst = getNumber("Enter upper threshold", 0);
+run("ROI Manager...");
+waitForUser("Using elliptical tool, draw circle around average somata then click OK");
+roiManager("Add");
+roiManager("Select", 0);
+run("Measure");
+avSize = getResult("Area");
+roiManager("delete");
+run("Select None");
+run("Clear Results");
+close();
+
+// Set pluripotency marker 1 isotype control threshold
+waitForUser("Open isotype control for pluripotency marker 1 then click OK"); 
+setAutoThreshold("Default dark no-reset");
+run("Threshold...");
+waitForUser("Set lower threshold slider to 0 then set upper threshold"); //max value should have full coverage but be as low as possible
+isotypeControlOct = getNumber("Enter upper threshold", 0);
+close();
+
+// Set pluripotency  marker 2 isotype control threshold
+waitForUser("Open pluripotency marker 2 isotype control then click OK"); 
+setAutoThreshold("Default dark no-reset");
+run("Threshold...");
+waitForUser("Set lower threshold slider to 0 then set upper threshold");
+isotypeControlTra = getNumber("Enter upper threshold", 0);
+close();
+
+//Batch process images
+waitForUser("Select input directory in next window");
+input = getDirectory("input");
+waitForUser("Select output directory in next window");
+output = getDirectory("output");
+list = getFileList(input);
+setBatchMode(true);
+Table.create("Staining Efficiency");
+
+for (i=0; i<list.length; i++) {
+	
+    setOption("ScaleConversions", true);
+	run("Bio-Formats Importer", "open=[" + input+list[i] + "] autoscale color_mode=Default rois_import=[ROI manager] view=Hyperstack stack_order=XYCZT");
+	file_ID = getTitle();
+	rename("image");
+	run("Stack to Images");
+	
+	//Hoechst
+	selectWindow("image-0003");
+	rename("Hoechst");
+	run("Duplicate...", "title=Hoechst_thresh");
+	setAutoThreshold("Default dark no-reset");
+	run("Threshold...");
+	setThreshold(lowerHoechst, upperHoechst);
+	setOption("BlackBackground", true);
+	run("Convert to Mask");
+	run("Watershed");
+	run("Duplicate...", "title=Cells");
+
+	//Oct
+	selectWindow("image-0002");
+	rename("Oct");
+	run("Duplicate...", "title=Oct_thresh");
+	setAutoThreshold("Default dark no-reset");
+	run("Threshold...");
+	setThreshold(isotypeControlOct, 255); 
+	setOption("BlackBackground", true);
+	run("Convert to Mask");
+
+	//Tra
+	selectWindow("image-0001"); 
+	rename("Tra");
+	run("Duplicate...", "title=Tra_thresh");
+	setAutoThreshold("Default dark no-reset");
+	run("Threshold...");
+	setThreshold(isotypeControlTra, 255);
+	setOption("BlackBackground", true);
+	run("Convert to Mask");
+	run("Open"); //morphological open to remove small particles
+
+	//Count cells
+	selectWindow("Cells");
+	run("Analyze Particles...", "size=10-Infinity show=[Overlay Masks] display clear summarize");
+	
+	//Pluripotency marker co-expression
+	imageCalculator("AND create", "Hoechst_thresh","Oct_thresh");
+	selectWindow("Result of Hoechst_thresh");
+	imageCalculator("AND create", "Result of Hoechst_thresh","Tra_thresh");
+	selectWindow("Result of Result of Hoechst_thresh");
+	rename("Pluripotency_markers");
+	min_expression = avSize/2; // included cells must have marker detectable on at least half of their area 
+	run("Analyze Particles...", "size=min_expression-Infinity show=[Overlay Masks] display clear summarize"); //set lower size threshold to min_expression
+	
+	selectWindow("Summary");
+	IJ.renameResults("Summary","Results");
+	
+	//Calculate % of cell count that express markers
+	cell_num = getResult("Count",0);
+	//print(cell_num);
+	plur_num = getResult("Count",1);
+	//print(plur_num);
+	percent = (plur_num/cell_num)*100;
+	
+	selectWindow("Staining Efficiency");
+	Table.set("File ID", i, file_ID);
+	Table.set("Percent stained cells",i,percent);
+	Table.update;
+
+    saveAs("Tiff", output+list[i]+"_cell_analysis");
+    close("*"); 
+    run("Clear Results");
+    run("Clear Results");
+    
+}
